@@ -169,6 +169,10 @@ nav#nav a[aria-current="page"]{color:#fff;border-bottom-color:#fff}
 .sizes button{min-width:46px;height:40px;padding:0 12px;border:1px solid var(--line);border-radius:6px;font-size:14px}
 .sizes button[aria-pressed="true"]{background:#fff;color:#000;border-color:#fff;font-weight:700}
 .hint{min-height:22px;font-size:13px;color:#ff8a7a;margin-top:8px}
+.stocknote{min-height:20px;font-size:13px;color:var(--mute);margin-top:8px}
+.sizes button:disabled{opacity:.35;text-decoration:line-through;cursor:not-allowed}
+.formerr{min-height:20px;font-size:14px;color:#ff8a7a;margin:0 0 8px}
+.pay label:has(input:disabled){opacity:.5;cursor:not-allowed}
 .buy{display:flex;gap:10px;margin-top:8px}
 .acc{border-bottom:1px solid var(--line)}
 .acc:first-of-type{margin-top:26px;border-top:1px solid var(--line)}
@@ -398,6 +402,7 @@ dialog::backdrop{background:rgba(0,0,0,.72)}
         <label><input type="radio" name="pay" value="card"><span>Debit or credit card<small>Paid on a secure payment page</small></span></label>
         <label><input type="radio" name="pay" value="cod"><span>Cash on delivery<small>Pay when your order arrives</small></span></label>
       </div>
+      <p class="formerr" id="coErr" role="alert"></p>
       <button class="btn block" type="submit">Place order</button>
     </form>
     <aside class="cosum" id="coSum"><h3>Your order</h3><div id="coSumBody"></div></aside>
@@ -417,7 +422,10 @@ const CONFIG = {
   email: 'hello@example.com',
   instagram: 'https://instagram.com/yourhandle',
   shipFee: 0,                     // 0 = free shipping on all orders
-  demo: true                      // set false once a real backend and payment gateway are connected
+  // Backend address. On your computer it is found automatically.
+  // After you deploy the backend, put its address here, for example 'https://bita-api.onrender.com'
+  api: (location.hostname === 'localhost' || location.hostname === '127.0.0.1') ? 'http://localhost:3000' : '',
+  demo: true                      // shows the "demo" note when there is no backend
 };
 
 /* Put your photo paths here (for example 'images/hero.jpg'). Empty means a placeholder is shown. */
@@ -442,7 +450,7 @@ const COLORS = {
 const CATS = [['all','All products'],['tees','T-Shirts'],['hoodies','Hoodies'],['pants','Pants'],['accessories','Accessories']];
 
 /* img: optional list of photo paths per product, for example ['images/tee-1.jpg','images/tee-2.jpg'] */
-const PRODUCTS = [
+let PRODUCTS = [
   {id:1,name:'Bita Essentials Tee',cat:'tees',kind:'tee',price:999,mrp:1499,badge:'New',colors:['black','white','charcoal'],sizes:TOPS,desc:'Premium cotton. Oversized fit. Made for everyday comfort and effortless style.',img:[]},
   {id:2,name:'Bita Oversized Tee',cat:'tees',kind:'otee',price:1099,mrp:1599,colors:['black','white'],sizes:TOPS,desc:'A dropped shoulder tee with a roomy, easy fall. Wear it loose.',img:[]},
   {id:3,name:'Bita Hoodie',cat:'hoodies',kind:'hoodie',price:1999,mrp:2799,badge:'New',colors:['black','charcoal'],sizes:TOPS,desc:'Heavy, soft and warm, with a front pouch pocket and a relaxed fit.',img:[]},
@@ -499,6 +507,47 @@ function pic(p, colorIdx, idx) {
   return `<div class="gar">${garment(p.kind, c.hex)}</div>`;
 }
 
+/* ================= Backend connection ================= */
+let LIVE = false; // true once products have come from the backend
+function stockOf(p, color, size) {
+  return p.stock ? (p.stock[color + '|' + size] ?? 0) : Infinity;
+}
+function stockNote(p) {
+  const n = pstate.size ? stockOf(p, p.colors[pstate.color], pstate.size) : Infinity;
+  return isFinite(n) && n > 0 && n <= 5 ? `Only ${n} left` : '';
+}
+function hsTrack() {
+  return PRODUCTS.map(card).join('') + `<a class="hs-end" href="#/shop"><span>View all<br>products</span>${ARROW}</a>`;
+}
+async function loadProducts() {
+  if (!CONFIG.api) return false;
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 60000); // free servers can take a while to wake up
+    const r = await fetch(CONFIG.api + '/api/products', { signal: ctl.signal });
+    clearTimeout(timer);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    if (!Array.isArray(data) || !data.length) throw new Error('No products');
+    data.forEach(p => p.colors.forEach(c => {
+      if (!COLORS[c]) COLORS[c] = { name: c.charAt(0).toUpperCase() + c.slice(1), hex: '#777777' };
+    }));
+    PRODUCTS = data; LIVE = true;
+    return true;
+  } catch (err) {
+    console.warn('Backend not reachable, showing sample products:', err.message);
+    return false;
+  }
+}
+function refreshAfterLoad(ok) {
+  if (!ok) return;
+  const h = location.hash;
+  if (h === '' || h === '#' || h === '#/') {
+    const tr = document.querySelector('.hs-track');
+    if (tr) { tr.innerHTML = hsTrack(); document.dispatchEvent(new CustomEvent('bita:route', { detail: { keep: true } })); }
+  } else route(true);
+}
+
 function altLayer(p) {
   const i = p.colors.length > 1 ? 1 : 0;
   if (p.img && p.img[1]) return `<div class="alt photo"><img class="real" src="${p.img[1]}" alt="" loading="lazy"></div>`;
@@ -508,7 +557,7 @@ function altLayer(p) {
 
 function card(p) {
   return `<a class="pcard" href="#/product/${p.id}" aria-label="${p.name}, ${inr(p.price)}">
-    <div class="pic photo">${pic(p)}${altLayer(p)}${p.badge?`<span class="badge">${p.badge}</span>`:''}<span class="qv">View</span></div>
+    <div class="pic photo">${pic(p)}${altLayer(p)}${p.soldOut?'<span class="badge">Sold out</span>':p.badge?`<span class="badge">${p.badge}</span>`:''}<span class="qv">View</span></div>
     <h3>${p.name}</h3><div class="pr">${inr(p.price)}<s>${inr(p.mrp)}</s></div></a>`;
 }
 
@@ -565,7 +614,7 @@ function viewHome() {
   <section class="hs" aria-label="Latest drop">
     <div class="hs-stick">
       <div class="hs-head"><h2>Latest drop</h2><div class="hs-meta"><div class="hs-bar" aria-hidden="true"><i></i></div><a class="lnk" href="#/shop">View all</a></div></div>
-      <div class="hs-track">${PRODUCTS.map(card).join('')}<a class="hs-end" href="#/shop"><span>View all<br>products</span>${ARROW}</a></div>
+      <div class="hs-track">${hsTrack()}</div>
     </div>
   </section>`;
 }
@@ -634,8 +683,8 @@ function viewProduct(id) {
         <div class="lab">Colour:<span>${COLORS[p.colors[pstate.color]].name}</span></div>
         <div class="sw" role="group" aria-label="Colour">${p.colors.map((c,i)=>`<button data-color="${i}" aria-pressed="${pstate.color===i}" aria-label="${COLORS[c].name}" style="background:${COLORS[c].hex}"></button>`).join('')}</div>
         <div class="lab">Size:<span>${pstate.size||''}</span></div>
-        <div class="sizes" role="group" aria-label="Size">${p.sizes.map(s=>`<button data-psize="${s}" aria-pressed="${pstate.size===s}">${s}</button>`).join('')}</div>
-        <div class="hint" id="hint" role="alert"></div>
+        <div class="sizes" role="group" aria-label="Size">${p.sizes.map(s=>`<button data-psize="${s}" aria-pressed="${pstate.size===s}" ${stockOf(p,p.colors[pstate.color],s)===0?'disabled':''}>${s}</button>`).join('')}</div>
+        <div class="stocknote">${stockNote(p)}</div><div class="hint" id="hint" role="alert"></div>
         <div class="buy"><button class="btn block" data-act="add">Add to cart</button></div>
         <details class="acc" open><summary>Product details</summary><div class="in"><ul><li>${p.desc}</li><li>Colour: ${p.colors.map(c=>COLORS[c].name).join(', ')}</li></ul></div></details>
         <details class="acc"><summary>Size guide</summary><div class="in"><table><tr>${guide.head.map(h=>`<th>${h}</th>`).join('')}</tr>${guide.rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</table></div></details>
@@ -760,12 +809,12 @@ view.addEventListener('click', e => {
   if ((b = t.closest('[data-cat]'))) { shopState.cat = b.dataset.cat; updateShop(); return; }
   if ((b = t.closest('[data-size]'))) { shopState.size = shopState.size === b.dataset.size ? null : b.dataset.size; updateShop(); return; }
   if (t.closest('[data-clear]')) { Object.assign(shopState,{cat:'all',price:[],size:null,q:'',sort:'new'}); const q=$('#q'); if(q) q.value=''; updateShop(); return; }
-  if ((b = t.closest('[data-color]'))) { pstate.color = +b.dataset.color; route(true); return; }
+  if ((b = t.closest('[data-color]'))) { pstate.color = +b.dataset.color; const cp = byId(pstate.id); if (cp && pstate.size && stockOf(cp, cp.colors[pstate.color], pstate.size) === 0) pstate.size = null; route(true); return; }
   if ((b = t.closest('[data-psize]'))) { pstate.size = b.dataset.psize; route(true); return; }
   if ((b = t.closest('[data-img]'))) { pstate.img = +b.dataset.img; route(true); return; }
   if ((b = t.closest('[data-q]'))) {
     const i = +b.dataset.i, a = b.dataset.q;
-    if (a==='inc') bag[i].qty++;
+    if (a==='inc') { const r = bag[i], rp = byId(r.id), max = rp ? stockOf(rp, r.color, r.size) : Infinity; if (r.qty + 1 > max) { toast(`Only ${max} available`); return; } r.qty++; }
     if (a==='dec') bag[i].qty = Math.max(1, bag[i].qty-1);
     if (a==='rm') bag.splice(i,1);
     saveBag(); updateCount(); route(true); return;
@@ -777,6 +826,8 @@ view.addEventListener('click', e => {
       if (!pstate.size) { $('#hint').textContent = 'Choose a size to add this to your cart.'; return; }
       const color = p.colors[pstate.color];
       const f = bag.find(i => i.id===p.id && i.color===color && i.size===pstate.size);
+      const max = stockOf(p, color, pstate.size);
+      if ((f ? f.qty : 0) + 1 > max) { toast(max > 0 ? `Only ${max} available` : 'Sold out'); return; }
       if (f) f.qty++; else bag.push({id:p.id,color,size:pstate.size,qty:1});
       saveBag(); updateCount();
       toast(`Added to cart <a href="#/cart">View cart</a>`);
@@ -827,29 +878,75 @@ function sumHTML(t) {
     + `<div class="sl"><span>Shipping</span><span>${t.ship?inr(t.ship):'Free'}</span></div>`
     + `<div class="sl t"><span>Total</span><span>${inr(t.total)}</span></div>`;
 }
+function setPayOptions() {
+  document.querySelectorAll('#coForm input[name="pay"]').forEach(r => {
+    const online = r.value !== 'cod';
+    const small = r.parentElement.querySelector('small');
+    if (online && !r.dataset.t) r.dataset.t = small.textContent;
+    r.disabled = LIVE && online;
+    if (online) small.textContent = LIVE ? 'Coming soon' : r.dataset.t;
+  });
+  if (LIVE) document.querySelector('#coForm input[value="cod"]').checked = true;
+}
 function openCheckout() {
   const t = totals(); if (!t.rows.length) return;
+  if (CONFIG.api && !LIVE) {
+    toast('Connecting to the store. Please try again in a moment.');
+    loadProducts().then(refreshAfterLoad);
+    return;
+  }
   $('#coForm').hidden = false; $('#coSum').hidden = false; $('#coDone').hidden = true;
   $('#coSumBody').innerHTML = sumHTML(t);
+  $('#coErr').textContent = '';
+  setPayOptions();
   $('#co').showModal();
 }
 $('#coClose').addEventListener('click', () => $('#co').close());
 $('#doneBtn').addEventListener('click', () => { $('#co').close(); location.hash = '#/shop'; });
-$('#coForm').addEventListener('submit', e => {
+$('#coForm').addEventListener('submit', async e => {
   e.preventDefault();
   const t = totals(); if (!t.rows.length) return;
   const f = new FormData(e.target);
-  const order = {
-    id:'BT'+String(Date.now()).slice(-7), date:new Date().toISOString(), pay:f.get('pay'), total:t.total,
-    items:t.rows.map(r=>({name:r.p.name,color:r.color,size:r.size,qty:r.qty,price:r.p.price})),
-    to:{name:f.get('name'),phone:f.get('phone'),email:f.get('email'),address:f.get('address'),city:f.get('city'),state:f.get('state'),pin:f.get('pin')}
-  };
-  try { const all = JSON.parse(localStorage.getItem('bita-orders')||'[]'); all.push(order); localStorage.setItem('bita-orders',JSON.stringify(all)); } catch(err) {}
+  const to = {name:f.get('name'),phone:f.get('phone'),email:f.get('email'),address:f.get('address'),city:f.get('city'),state:f.get('state'),pin:f.get('pin')};
+  let id, total = t.total, pay = f.get('pay');
+
+  if (LIVE) {
+    const btn = e.target.querySelector('button[type="submit"]');
+    $('#coErr').textContent = '';
+    btn.disabled = true; btn.textContent = 'Placing order...';
+    try {
+      const r = await fetch(CONFIG.api + '/api/orders', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({payment: pay, customer: to, items: t.rows.map(x => ({productId: x.p.id, color: x.color, size: x.size, qty: x.qty}))})
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        $('#coErr').textContent = data.error || 'Could not place the order. Please try again.';
+        if (r.status === 409 || r.status === 400) loadProducts().then(refreshAfterLoad);
+        return;
+      }
+      id = data.order.code; total = data.order.total; pay = data.order.paymentMethod;
+    } catch (err) {
+      $('#coErr').textContent = 'Could not reach the store. Check your connection and try again.';
+      return;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Place order';
+    }
+    loadProducts().then(refreshAfterLoad);
+  } else {
+    // Demo mode (no backend): the order is saved only in this browser
+    id = 'BT' + String(Date.now()).slice(-7);
+    const order = {id, date:new Date().toISOString(), pay, total, to,
+      items:t.rows.map(r=>({name:r.p.name,color:r.color,size:r.size,qty:r.qty,price:r.p.price}))};
+    try { const all = JSON.parse(localStorage.getItem('bita-orders')||'[]'); all.push(order); localStorage.setItem('bita-orders',JSON.stringify(all)); } catch(err) {}
+  }
+
   bag = []; saveBag(); updateCount();
-  $('#doneId').textContent = order.id;
-  $('#doneName').textContent = order.to.name;
-  $('#donePay').textContent = order.pay==='cod' ? 'Pay in cash when your order arrives.' : 'A secure payment link will be sent to complete your payment.';
-  $('#demoNote').hidden = !CONFIG.demo;
+  $('#doneId').textContent = id;
+  $('#doneName').textContent = to.name;
+  $('#donePay').textContent = pay === 'cod' ? `Total ${inr(total)}. Pay in cash when your order arrives.` : 'A secure payment link will be sent to complete your payment.';
+  $('#demoNote').hidden = LIVE || !CONFIG.demo;
   $('#coForm').hidden = true; $('#coSum').hidden = true; $('#coDone').hidden = false;
   e.target.reset();
   if (location.hash.startsWith('#/cart')) route(true);
@@ -857,6 +954,7 @@ $('#coForm').addEventListener('submit', e => {
 
 updateCount();
 route(false);
+loadProducts().then(refreshAfterLoad);
 </script>
 </body>
-</html>
+</html>s
