@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>BITA Admin</title>
+<style>
+:root{--bg:#0a0a0a;--card:#141414;--line:#262626;--tx:#f2f2f2;--mute:#9a9a9a;--gold:#cdac6c;--bad:#ff8a7a;--ok:#7bd88f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+header b{color:var(--gold);letter-spacing:.3em;font-size:14px}
+nav{display:flex;gap:6px}
+button,select,input,textarea{font:inherit;color:var(--tx);background:#1b1b1b;border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+textarea{width:100%;min-height:70px;resize:vertical}
+input,select{max-width:100%}
+button{cursor:pointer}
+button:hover:not(:disabled){border-color:var(--gold)}
+button:disabled{opacity:.5;cursor:default}
+button.on{background:var(--gold);color:#111;border-color:var(--gold)}
+button.gold{background:var(--gold);color:#111;border-color:var(--gold);font-weight:600}
+main{max-width:1000px;margin:0 auto;padding:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.sp{justify-content:space-between}
+.mute{color:var(--mute);font-size:13px}
+.code{font-weight:700;letter-spacing:.06em}
+.pill{display:inline-block;padding:2px 10px;border-radius:99px;border:1px solid var(--line);font-size:12px;color:var(--mute)}
+.err{color:var(--bad);min-height:20px;font-size:14px;margin:8px 0 0}
+.good{color:var(--ok)}
+label{display:block;font-size:13px;color:var(--mute);margin:12px 0 4px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.stock{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-top:10px}
+.stock div{border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.stock input{width:100%;margin-top:4px;padding:5px 8px}
+.stock .low input{border-color:var(--bad)}
+ul{margin:8px 0;padding-left:18px}
+.login{max-width:340px;margin:12vh auto;padding:0 20px}
+.login input{width:100%;margin:10px 0}
+[hidden]{display:none!important}
+hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+</style>
+</head>
+<body>
+
+<div id="loginView" class="login" hidden>
+  <h2 style="color:var(--gold);letter-spacing:.25em;font-size:18px">BITA ADMIN</h2>
+  <form id="loginForm">
+    <input id="pw" type="password" placeholder="Admin password" autocomplete="current-password" required>
+    <button class="gold" style="width:100%">Log in</button>
+    <p class="err" id="loginErr" role="alert"></p>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <b>BITA ADMIN</b>
+    <nav>
+      <button id="tabOrders" class="on">Orders</button>
+      <button id="tabProducts">Products</button>
+      <button id="logout">Log out</button>
+    </nav>
+  </header>
+  <main>
+    <section id="ordersView">
+      <div class="row sp" style="margin-bottom:14px">
+        <select id="statusFilter">
+          <option value="">All orders</option>
+          <option value="pending">Pending</option>
+          <option value="confirmed">Confirmed</option>
+          <option value="shipped">Shipped</option>
+          <option value="delivered">Delivered</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <button id="reloadOrders">Refresh</button>
+      </div>
+      <div id="orders"></div>
+    </section>
+
+    <section id="productsView" hidden>
+      <div class="row sp" style="margin-bottom:14px">
+        <b>Products</b>
+        <button class="gold" id="newProductBtn">+ Add product</button>
+      </div>
+      <form id="newForm" class="card" hidden></form>
+      <div id="products"></div>
+    </section>
+    <p class="err" id="msg" role="alert"></p>
+  </main>
+</div>
+
+<script>
+// Backend address: found automatically on your computer, otherwise the live backend
+const API = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+  ? 'http://localhost:3000' : 'https://bita-api-bx0s.onrender.com';
+
+const $ = s => document.querySelector(s);
+const inr = n => '₹' + Number(n).toLocaleString('en-IN');
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (v === true) e.setAttribute(k, '');
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  kids.flat().forEach(c => { if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(c)); });
+  return e;
+}
+
+let token = '';
+try { token = sessionStorage.getItem('bita-admin') || ''; } catch (e) {}
+
+async function api(path, opts = {}) {
+  let r;
+  try {
+    r = await fetch(API + '/api/admin' + path, {
+      method: opts.method || 'GET',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+  } catch (e) { throw new Error('Cannot reach the server. If it was sleeping, wait a minute and try again.'); }
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== '/login') { logout(); throw new Error('Please log in again'); }
+  if (!r.ok) throw new Error(data.error || 'Something went wrong');
+  return data;
+}
+function say(text, good) { const m = $('#msg'); m.textContent = text || ''; m.className = 'err' + (good ? ' good' : ''); if (good) setTimeout(() => { if (m.textContent === text) m.textContent = ''; }, 3000); }
+
+/* ---------- login ---------- */
+function showApp(on) { $('#app').hidden = !on; $('#loginView').hidden = on; }
+function logout() { token = ''; try { sessionStorage.removeItem('bita-admin'); } catch (e) {} showApp(false); }
+$('#logout').onclick = logout;
+$('#loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button'); btn.disabled = true; $('#loginErr').textContent = '';
+  try {
+    const d = await api('/login', { method: 'POST', body: { password: $('#pw').value } });
+    token = d.token; try { sessionStorage.setItem('bita-admin', token); } catch (e2) {}
+    $('#pw').value = ''; showApp(true); loadOrders();
+  } catch (err) { $('#loginErr').textContent = err.message; }
+  btn.disabled = false;
+});
+
+/* ---------- tabs ---------- */
+function tab(which) {
+  $('#ordersView').hidden = which !== 'orders'; $('#productsView').hidden = which !== 'products';
+  $('#tabOrders').classList.toggle('on', which === 'orders'); $('#tabProducts').classList.toggle('on', which === 'products');
+  say('');
+  which === 'orders' ? loadOrders() : loadProducts();
+}
+$('#tabOrders').onclick = () => tab('orders');
+$('#tabProducts').onclick = () => tab('products');
+
+/* ---------- orders ---------- */
+const STATUSES = ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled'];
+$('#reloadOrders').onclick = loadOrders;
+$('#statusFilter').onchange = loadOrders;
+
+async function loadOrders() {
+  const box = $('#orders'); box.replaceChildren(h('p', { class: 'mute' }, 'Loading...'));
+  try {
+    const f = $('#statusFilter').value;
+    const rows = await api('/orders' + (f ? '?status=' + f : ''));
+    box.replaceChildren(...(rows.length ? rows.map(orderCard) : [h('p', { class: 'mute' }, 'No orders yet.')]));
+  } catch (err) { box.replaceChildren(); say(err.message); }
+}
+function orderCard(o) {
+  const sel = h('select', {}, STATUSES.map(s => h('option', { value: s, selected: s === o.status }, s)));
+  const save = h('button', { onclick: async () => {
+    if (sel.value === 'cancelled' && !confirm('Cancel this order? The stock goes back. This cannot be undone.')) { sel.value = o.status; return; }
+    save.disabled = true;
+    try { await api('/orders/' + o.code, { method: 'PATCH', body: { status: sel.value } }); say('Order ' + o.code + ' is now ' + sel.value, true); loadOrders(); }
+    catch (err) { say(err.message); sel.value = o.status; }
+    save.disabled = false;
+  } }, 'Save status');
+  return h('div', { class: 'card' },
+    h('div', { class: 'row sp' },
+      h('div', {}, h('span', { class: 'code' }, o.code), ' ', h('span', { class: 'pill' }, o.payment_method.toUpperCase() + ' · ' + o.payment_status)),
+      h('div', { class: 'mute' }, new Date(o.created_at).toLocaleString('en-IN'))),
+    h('div', { class: 'row', style: 'margin:10px 0' }, sel, save, h('b', { style: 'margin-left:auto' }, inr(o.total))),
+    h('ul', {}, o.items.map(i => h('li', {}, `${i.name} · ${i.color} · ${i.size} × ${i.qty} (${inr(i.price)})`))),
+    h('div', { class: 'mute' }, `${o.name} · ${o.phone} · ${o.email}`),
+    h('div', { class: 'mute' }, `${o.address}, ${o.city}, ${o.state} ${o.pin}`));
+}
+
+/* ---------- products ---------- */
+const CATS = [['tees', 'T-Shirts'], ['hoodies', 'Hoodies'], ['pants', 'Pants'], ['accessories', 'Accessories']];
+const KINDS = [['tee', 'T-shirt'], ['otee', 'Oversized tee'], ['hoodie', 'Hoodie'], ['cargo', 'Cargo pants'], ['track', 'Track pants'], ['cap', 'Cap']];
+const SIZE_SETS = { Tops: 'S, M, L, XL, XXL', Bottoms: '28, 30, 32, 34, 36', 'One size': 'One size' };
+const lines = t => t.split('\n').map(x => x.trim()).filter(Boolean);
+const list = t => t.split(',').map(x => x.trim()).filter(Boolean);
+
+async function loadProducts() {
+  const box = $('#products'); box.replaceChildren(h('p', { class: 'mute' }, 'Loading...'));
+  try {
+    const rows = await api('/products');
+    box.replaceChildren(...(rows.length ? rows.map(productCard) : [h('p', { class: 'mute' }, 'No products yet.')]));
+  } catch (err) { box.replaceChildren(); say(err.message); }
+}
+
+function productCard(p) {
+  const colors = [...new Set(p.variants.map(v => v.color))];
+  const sizes = [...new Set(p.variants.map(v => v.size))];
+  const total = p.variants.reduce((s, v) => s + v.stock, 0);
+  const grid = h('div', { class: 'stock' });
+  for (const c of colors) for (const s of sizes) {
+    const v = p.variants.find(x => x.color === c && x.size === s); if (!v) continue;
+    const inp = h('input', { type: 'number', min: '0', value: v.stock });
+    const cell = h('div', { class: v.stock <= 5 ? 'low' : '' }, h('span', { class: 'mute' }, c + ' · ' + s), inp);
+    inp.addEventListener('change', async () => {
+      try { await api('/products/' + p.id + '/stock', { method: 'PUT', body: { color: c, size: s, stock: inp.value } }); cell.className = Number(inp.value) <= 5 ? 'low' : ''; say(`${p.name} ${c} ${s}: stock ${inp.value}`, true); }
+      catch (err) { say(err.message); inp.value = v.stock; }
+    });
+    grid.append(cell);
+  }
+  const edit = h('div', { hidden: true });
+  const f = {
+    name: h('input', { value: p.name }), price: h('input', { type: 'number', value: p.price }), mrp: h('input', { type: 'number', value: p.mrp }),
+    badge: h('input', { value: p.badge || '', maxlength: 20 }), desc: h('textarea', {}, p.description || ''), images: h('textarea', {}, (p.images || []).join('\n'))
+  };
+  const saveBtn = h('button', { class: 'gold', onclick: async () => {
+    saveBtn.disabled = true;
+    try {
+      await api('/products/' + p.id, { method: 'PATCH', body: { name: f.name.value, price: f.price.value, mrp: f.mrp.value, badge: f.badge.value, description: f.desc.value, images: lines(f.images.value) } });
+      say('Saved ' + f.name.value, true); loadProducts();
+    } catch (err) { say(err.message); }
+    saveBtn.disabled = false;
+  } }, 'Save changes');
+  edit.append(h('hr'),
+    h('div', { class: 'grid' }, h('div', {}, h('label', {}, 'Name'), f.name), h('div', {}, h('label', {}, 'Price (₹)'), f.price), h('div', {}, h('label', {}, 'MRP (₹)'), f.mrp), h('div', {}, h('label', {}, 'Badge (for example New)'), f.badge)),
+    h('label', {}, 'Description'), f.desc,
+    h('label', {}, 'Photos, one address per line (https://... or images/name.jpg)'), f.images,
+    h('div', { style: 'margin-top:12px' }, saveBtn));
+  const toggle = h('button', { onclick: async () => {
+    try { await api('/products/' + p.id, { method: 'PATCH', body: { active: !p.active } }); say(p.active ? 'Hidden from the shop' : 'Visible in the shop', true); loadProducts(); }
+    catch (err) { say(err.message); }
+  } }, p.active ? 'Hide from shop' : 'Show in shop');
+  return h('div', { class: 'card', style: p.active ? '' : 'opacity:.65' },
+    h('div', { class: 'row sp' },
+      h('div', {}, h('b', {}, p.name), ' ', h('span', { class: 'pill' }, p.active ? (total === 0 ? 'sold out' : total + ' in stock') : 'hidden')),
+      h('div', { class: 'row' }, h('span', { class: 'mute' }, inr(p.price) + ' (MRP ' + inr(p.mrp) + ')'), h('button', { onclick: () => { edit.hidden = !edit.hidden; } }, 'Edit'), toggle)),
+    h('div', { class: 'mute' }, 'Type a stock number and press Enter or click away to save. Red = 5 or fewer.'),
+    grid, edit);
+}
+
+/* ---------- add product ---------- */
+$('#newProductBtn').onclick = () => { const f = $('#newForm'); f.hidden = !f.hidden; if (!f.hidden && !f.children.length) buildNewForm(); };
+function buildNewForm() {
+  const f = $('#newForm');
+  const n = { name: h('input', { required: true }), cat: h('select', {}, CATS.map(([k, l]) => h('option', { value: k }, l))), kind: h('select', {}, KINDS.map(([k, l]) => h('option', { value: k }, l))),
+    price: h('input', { type: 'number', min: '1', required: true }), mrp: h('input', { type: 'number', min: '1', placeholder: 'same as price' }), badge: h('input', { maxlength: 20 }),
+    desc: h('textarea', {}), images: h('textarea', { placeholder: 'images/black-tee-1.jpg' }), colors: h('input', { value: 'black, white', placeholder: 'black, white, charcoal' }),
+    sizes: h('input', { value: SIZE_SETS.Tops }), stock: h('input', { type: 'number', min: '0', value: '10' }) };
+  const err = h('p', { class: 'err', role: 'alert' });
+  const sizeBtns = Object.entries(SIZE_SETS).map(([k, v]) => h('button', { type: 'button', onclick: () => { n.sizes.value = v; } }, k));
+  f.append(h('b', {}, 'New product'),
+    h('div', { class: 'grid' }, h('div', {}, h('label', {}, 'Name'), n.name), h('div', {}, h('label', {}, 'Category'), n.cat), h('div', {}, h('label', {}, 'Shape (used when there is no photo)'), n.kind),
+      h('div', {}, h('label', {}, 'Price (₹)'), n.price), h('div', {}, h('label', {}, 'MRP (₹)'), n.mrp), h('div', {}, h('label', {}, 'Badge (optional)'), n.badge)),
+    h('label', {}, 'Description'), n.desc,
+    h('label', {}, 'Colours, separated by commas'), n.colors,
+    h('label', {}, 'Sizes, separated by commas'), n.sizes, h('div', { class: 'row', style: 'margin-top:6px' }, sizeBtns),
+    h('label', {}, 'Starting stock for every colour and size'), n.stock,
+    h('label', {}, 'Photos, one address per line (optional)'), n.images,
+    err, h('div', { style: 'margin-top:12px' }, h('button', { class: 'gold' }, 'Add product')));
+  f.addEventListener('submit', async e => {
+    e.preventDefault(); err.textContent = '';
+    const btn = f.querySelector('button.gold'); btn.disabled = true;
+    try {
+      await api('/products', { method: 'POST', body: { name: n.name.value, category: n.cat.value, kind: n.kind.value, price: n.price.value, mrp: n.mrp.value, badge: n.badge.value,
+        description: n.desc.value, images: lines(n.images.value), colors: list(n.colors.value), sizes: list(n.sizes.value), stock: n.stock.value } });
+      f.replaceChildren(); f.hidden = true; say('Product added', true); loadProducts();
+    } catch (e2) { err.textContent = e2.message; }
+    btn.disabled = false;
+  });
+}
+
+/* ---------- start ---------- */
+if (token) { showApp(true); loadOrders(); } else showApp(false);
+</script>
+</body>
+</html>

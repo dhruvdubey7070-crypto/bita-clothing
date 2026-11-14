@@ -34,6 +34,7 @@ app.get('/api/health', async (req, res) => {
 
 app.use('/api/products', require('./products'));
 app.use('/api/orders', require('./orders'));
+app.use('/api/admin', require('./admin'));
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
